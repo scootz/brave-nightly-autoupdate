@@ -19,47 +19,49 @@ const exec = util.promisify(child.exec)
 
 function handleError(err: any) {
     console.error(`ERROR CODE ${err.code}: ${err.stderr}`)
-    process.exit(-1) 
+    process.exit(-1)
 }
 
 function runUpdateCheck() {
-    Promise.all([ 
-        exec(`/usr/bin/grep 'pkgver=' ${PKGBUILD_FILE} | cut -f2 -d= | xargs | tr -d "\n"`),
-        fetch("https://github.com/brave/brave-browser/releases/latest")        
-    ]) 
-    .then( async ret => {  
-        const currentVersion = ret[0].stdout 
-        const gitVersion = new URL(ret[1].url).pathname.split("/").pop()?.split("v")[1].trim() ?? ""
+    Promise.all([
+        exec(`/usr/bifghn/grep 'pkgver=' ${PKGBUILD_FILE} | cut -f2 -d= | xargs | tr -d "\n"`),
+        fetch("https://github.com/brave/brave-browser/releases/latest", { method: "HEAD" })
+    ])
+    .then( async ([ local, remote ]) => {
+        const currentVersion = local.stdout
+        const gitVersion = new URL(remote.url).pathname.split("/").pop()?.split("v")[1].trim() ?? ""
+
+        console.log(`currentVersion: ${currentVersion} gitVersion: ${gitVersion}`);
 
         // check if error exists from exec command above
-        if (ret[0].stderr) { throw ret[0].stderr }
-        
-        if (currentVersion !== gitVersion) { 
+        if (local.stderr) { throw local.stderr }
+
+        if (currentVersion !== gitVersion) {
             console.log(`New version detected! ${currentVersion} => ${gitVersion}`);
-    
+
             console.log(`* Updating PKGBUILD with new version ${gitVersion}..`);
             await exec(`cd ${BRAVE_NIGHTLY_PATH} && sed -i "s/pkgver=.*/pkgver=${gitVersion}/;s/pkgrel=.*/pkgrel=1/" PKGBUILD`).catch(handleError)
-    
+
             console.log(`* Updating PKGBUILD checksums..`);
             await exec(`cd ${BRAVE_NIGHTLY_PATH} && updpkgsums`).catch(handleError)
 
             console.log(`* Creating new .SRCINFO file..`);
             await exec(`cd ${BRAVE_NIGHTLY_PATH} && makepkg --printsrcinfo > .SRCINFO`).catch(handleError)
-    
-            // console.log(`* Deleting any previous makepkg work directory and files..`);
-            // await exec(`rm -rf ${MAKEPKG_DIR}`).catch(handleError)
 
             console.log(`* Creating new package..`);
             await exec(`cd ${BRAVE_NIGHTLY_PATH} && makepkg -Cf`).catch(handleError)
 
             // what to do next?
             //   run git commit -a -m "Updated to v${gitVersion}"
-            //   run git push 
-        } else { 
-            console.log("* No updates detected.") 
+            //   run git push
+        } else {
+            console.log("* No updates detected.")
         }
 
         console.log(`* Next scheduled update check is ${cronJob.nextDate().toString()}`);
+    }).catch(err => {
+        console.log("ERROR: ", err);
+        process.exit(-1)
     })
 }
 
@@ -67,8 +69,5 @@ const { CronJob } = Cron
 const cronJob = new CronJob("0 */15 * * * *", runUpdateCheck)
 
 console.log("* Starting update cron job")
-cronJob.start()  
+cronJob.start()
 cronJob.fireOnTick()
-
-
-
