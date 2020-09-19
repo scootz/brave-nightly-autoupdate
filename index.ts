@@ -24,7 +24,7 @@ function handleError(err: any) {
 
 function runUpdateCheck() {
     Promise.all([
-        exec(`/usr/bifghn/grep 'pkgver=' ${PKGBUILD_FILE} | cut -f2 -d= | xargs | tr -d "\n"`),
+        exec(`/usr/bin/grep 'pkgver=' ${PKGBUILD_FILE} | cut -f2 -d= | xargs | tr -d "\n"`),
         fetch("https://github.com/brave/brave-browser/releases/latest", { method: "HEAD" })
     ])
     .then( async ([ local, remote ]) => {
