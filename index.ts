@@ -5,68 +5,63 @@ import child from "child_process"
 import fetch from "node-fetch"
 import Cron from "cron"
 
-// https://github.com/brave/brave-browser/releases/latest
-// https://github.com/brave/brave-browser/releases/tag/v1.16.26
-// https://github.com/brave/brave-browser/releases/download/v1.16.26/brave-browser-nightly_1.16.26_amd64.deb
-// pkgver=1.16.26
-// pkgrel=1
-
-const PACKAGE_NAME = "brave-nightly-bin"
-const BRAVE_NIGHTLY_PATH = `../${PACKAGE_NAME}`
-const PKGBUILD_FILE = `${BRAVE_NIGHTLY_PATH}/PKGBUILD`
-
 const exec = util.promisify(child.exec)
 
-function handleError(err: any) {
-    console.error(`ERROR CODE ${err.code}: ${err.stderr}`)
-    process.exit(-1)
+// Configurables.
+const LATEST_URL = "https://github.com/brave/brave-browser/releases/latest"
+const PROJECT_PATH = process.argv[2] ?? "../brave-nightly-bin"
+const PKGBUILD = `${PROJECT_PATH}/PKGBUILD`
+const INTERVAL = 15 // in minutes
+
+// Nothing below this line should be changed unless you know what you are doing.
+let PROJECT_NAME: string = ""
+
+try {
+    fs.accessSync(PKGBUILD, fs.constants.R_OK)
+
+    PROJECT_NAME = (await exec(`grep -m1 pkgname= ${PKGBUILD} | cut -f2 -d=`)).stdout.trim()
+} catch (ex) {
+    handleError(`Cannot find or read ${PKGBUILD}`)
 }
+
+function handleError(err: any) { console.error(`* ERROR: `, err); process.exit(-1) }
+function log(msg: string) { console.log(`[${(new Date()).toString()}] [${PROJECT_NAME}]`, msg) }
 
 function runUpdateCheck() {
     Promise.all([
-        exec(`/usr/bin/grep 'pkgver=' ${PKGBUILD_FILE} | cut -f2 -d= | xargs | tr -d "\n"`),
-        fetch("https://github.com/brave/brave-browser/releases/latest", { method: "HEAD" })
+        exec(`/usr/bin/grep -m1 'pkgver=' PKGBUILD | cut -f2 -d= | xargs | tr -d "\n"`, { cwd: PROJECT_PATH }),
+        fetch(LATEST_URL, { method: "HEAD" })
     ])
     .then( async ([ local, remote ]) => {
         const currentVersion = local.stdout
         const gitVersion = new URL(remote.url).pathname.split("/").pop()?.split("v")[1].trim() ?? ""
 
-        console.log(`currentVersion: ${currentVersion} gitVersion: ${gitVersion}`);
-
-        // check if error exists from exec command above
-        if (local.stderr) { throw local.stderr }
-
         if (currentVersion !== gitVersion) {
-            console.log(`New version detected! ${currentVersion} => ${gitVersion}`);
+            log(`New version detected! ${currentVersion} => ${gitVersion}`);
 
-            console.log(`* Updating PKGBUILD with new version ${gitVersion}..`);
-            await exec(`cd ${BRAVE_NIGHTLY_PATH} && sed -i "s/pkgver=.*/pkgver=${gitVersion}/;s/pkgrel=.*/pkgrel=1/" PKGBUILD`).catch(handleError)
+            const COMMANDS = [
+                { msg: `Updating PKGBUILD with new version ${gitVersion}`,  cmd: `sed -i "s/pkgver=.*/pkgver=${gitVersion}/;s/pkgrel=.*/pkgrel=1/" PKGBUILD` },
+                { msg: `Updating PKGBUILD checksums`, cmd: `updpkgsums` },
+                { msg: `Creating new .SRCINFO`, cmd: `makepkg --printsrcinfo > .SRCINFO` },
+                { msg: `Creating new package`, cmd: `makepkg -Cf` }
+            ]
 
-            console.log(`* Updating PKGBUILD checksums..`);
-            await exec(`cd ${BRAVE_NIGHTLY_PATH} && updpkgsums`).catch(handleError)
-
-            console.log(`* Creating new .SRCINFO file..`);
-            await exec(`cd ${BRAVE_NIGHTLY_PATH} && makepkg --printsrcinfo > .SRCINFO`).catch(handleError)
-
-            console.log(`* Creating new package..`);
-            await exec(`cd ${BRAVE_NIGHTLY_PATH} && makepkg -Cf`).catch(handleError)
-
-            // what to do next?
-            //   run git commit -a -m "Updated to v${gitVersion}"
-            //   run git push
+            COMMANDS.forEach(async command => {
+                log(`* ${command.msg}..`);
+                await exec(command.cmd, { cwd: PROJECT_PATH }).catch(handleError)
+            })
         } else {
-            console.log("* No updates detected.")
+            log('No new version detected.')
         }
 
-        console.log(`* Next scheduled update check is ${cronJob.nextDate().toString()}`);
+        log(`Next scheduled check at ${cronJob.nextDate().toString()}`);
     }).catch(err => {
-        console.log("ERROR: ", err);
-        process.exit(-1)
+        handleError(err);
     })
 }
 
 const { CronJob } = Cron
-const cronJob = new CronJob("0 */15 * * * *", runUpdateCheck)
+const cronJob = new CronJob(`0 */${INTERVAL} * * * *`, runUpdateCheck)
 
 console.log("* Starting update cron job")
 cronJob.start()
